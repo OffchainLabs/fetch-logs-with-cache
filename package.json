@@ -14,13 +14,13 @@
   ],
   "devDependencies": {
     "@types/node": "^20.14.2",
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/yargs": "^17.0.32",
     "prettier": "^3.3.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "@types/better-sqlite3": "^7.6.10",
-    "@types/yargs": "^17.0.32",
     "better-sqlite3": "^11.0.0",
     "ethers": "^6.13.0",
     "yargs": "^17.7.2"
