@@ -114,10 +114,7 @@ import {
     }
   }
 
-  // Initialize database
-  const db = new Database(dbPath)
-
-  const logCache = new LogCache(db)
+  const logCache = new LogCache(dbPath)
 
   try {
     // Set up provider and filter
@@ -183,9 +180,6 @@ import {
     console.error(e)
     process.exit(1)
   }
-
-  // Close database connection
-  db.close()
 })().catch(e => {
   console.error(e)
   process.exit(1)
