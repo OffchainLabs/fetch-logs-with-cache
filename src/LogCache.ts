@@ -1,5 +1,5 @@
 import { AbstractProvider, Filter, ethers } from 'ethers'
-import Database from 'better-sqlite3'
+import { Database } from 'better-sqlite3'
 import {
   BlockRange,
   StrictFilter,
@@ -57,14 +57,14 @@ export type FetchLogsToCacheBatchCallback = (
  * LogCache class for caching and retrieving Ethereum logs
  */
 export class LogCache {
-  private db: Database.Database
+  private db: Database
 
   /**
    * Creates a new LogCache instance
    * @param db - Better-sqlite3 Database instance
    */
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath)
+  constructor(db: Database) {
+    this.db = db
     this._setUpDb()
   }
 
@@ -135,9 +135,6 @@ export class LogCache {
     fromBlock: number,
     toBlock: number
   ): void {
-    if (fromBlock > toBlock) {
-      throw new Error('Invalid range')
-    }
     const insertRange = this.db.prepare(
       'INSERT INTO fetched_ranges (filterId, fromBlock, toBlock) VALUES (?, ?, ?)'
     )
@@ -330,7 +327,11 @@ export class LogCache {
     unfinalizedLogsCallback?: FetchLogsBatchCallback
   ): Promise<ethers.Log[]> {
     // Get the number of the last finalized block
-    const lastFinalizedBlock = (await provider.getBlock('finalized'))?.number || 0
+    const lastFinalizedBlock = (await provider.getBlock('finalized'))?.number
+
+    if (lastFinalizedBlock === undefined) {
+      throw new Error('Invalid block')
+    }
 
     // Set blocks to 'earliest' and 'latest' if not provided
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
@@ -462,10 +463,6 @@ export class LogCache {
       provider,
       filter.toBlock || defaultToBlock
     )
-
-    if (fromBlock > toBlock) {
-      throw new Error('Invalid block range')
-    }
 
     return {
       ...filter,
