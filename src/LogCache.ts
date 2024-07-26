@@ -1,5 +1,5 @@
 import { AbstractProvider, Filter, ethers } from 'ethers'
-import { Database } from 'better-sqlite3'
+import Database from 'better-sqlite3'
 import {
   BlockRange,
   StrictFilter,
@@ -57,14 +57,14 @@ export type FetchLogsToCacheBatchCallback = (
  * LogCache class for caching and retrieving Ethereum logs
  */
 export class LogCache {
-  private db: Database
+  private db: Database.Database
 
   /**
    * Creates a new LogCache instance
    * @param db - Better-sqlite3 Database instance
    */
-  constructor(db: Database) {
-    this.db = db
+  constructor(dbPath: string) {
+    this.db = new Database(dbPath)
     this._setUpDb()
   }
 
