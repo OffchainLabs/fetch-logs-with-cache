@@ -239,14 +239,19 @@ export class LogCache {
       throw new Error(`Invalid page size ${pageSize}`)
     }
 
+    const lastFinalizedBlock = await getFinalizedBlockNumber(provider)
+
+    if (!lastFinalizedBlock) {
+      throw new Error('Could not get finalized block')
+    }
+
     // Set blocks to 'earliest' and 'finalized' if not provided
     const strictFilter = await LogCache.toStrictFilter(
       provider,
       filter,
-      'finalized'
+      lastFinalizedBlock
     )
 
-    const lastFinalizedBlock = await getFinalizedBlockNumber(provider)
     if (strictFilter.toBlock > lastFinalizedBlock) {
       throw new Error('toBlock is not finalized')
     }
@@ -327,31 +332,30 @@ export class LogCache {
     unfinalizedLogsCallback?: FetchLogsBatchCallback
   ): Promise<ethers.Log[]> {
     // Get the number of the last finalized block
-    const lastFinalizedBlock = (await provider.getBlock('finalized'))?.number
-
-    if (lastFinalizedBlock === undefined) {
-      throw new Error('Invalid block')
-    }
+    const lastFinalizedBlock = (await getFinalizedBlockNumber(provider)) || -1
 
     // Set blocks to 'earliest' and 'latest' if not provided
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
 
-    // Fetch and cache logs for finalized blocks
-    await this.fetchLogsToCache(
-      provider,
-      {
+    const logs: ethers.Log[] = []
+
+    // Fetch and cache logs for finalized blocks if some blocks in range are finalized
+    if (strictFilter.fromBlock <= lastFinalizedBlock) {
+      const finalizedFilter = {
         ...strictFilter,
         toBlock: Math.min(strictFilter.toBlock, lastFinalizedBlock),
-      },
-      pageSize,
-      finalizedLogsCallback
-    )
+      }
 
-    // Read cached logs for finalized blocks
-    const logs = await this.readLogsFromCache(provider, {
-      ...strictFilter,
-      toBlock: Math.min(strictFilter.toBlock, lastFinalizedBlock),
-    })
+      await this.fetchLogsToCache(
+        provider,
+        finalizedFilter,
+        pageSize,
+        finalizedLogsCallback
+      )
+
+      // Read cached logs for finalized blocks
+      logs.push(...(await this.readLogsFromCache(provider, finalizedFilter)))
+    }
 
     // If the requested toBlock is beyond the last finalized block,
     // fetch logs for unfinalized blocks directly (without caching)
@@ -360,7 +364,7 @@ export class LogCache {
         provider,
         {
           ...strictFilter,
-          fromBlock: lastFinalizedBlock + 1,
+          fromBlock: Math.max(lastFinalizedBlock + 1, strictFilter.fromBlock),
         },
         pageSize,
         unfinalizedLogsCallback
@@ -463,6 +467,10 @@ export class LogCache {
       provider,
       filter.toBlock || defaultToBlock
     )
+
+    if (toBlock < fromBlock) {
+      throw new Error(`Invalid block range: ${fromBlock} to ${toBlock}`)
+    }
 
     return {
       ...filter,

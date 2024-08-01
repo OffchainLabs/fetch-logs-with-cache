@@ -119,9 +119,14 @@ export function mergeRanges(ranges: BlockRange[]): BlockRange[] {
  * @throws Error if unable to get the finalized block number
  */
 export async function getFinalizedBlockNumber(provider: AbstractProvider) {
-  const blockNumber = (await provider.getBlock('finalized'))?.number
-  if (blockNumber === undefined) {
-    throw new Error('Cannot get finalized block number')
+  try {
+    const blockNumber = (await provider.getBlock('finalized'))?.number
+    return blockNumber
+  } catch (e: any) {
+    const code: number = e.error?.code || 0
+    if (32000 <= -code && -code < 33000) {
+      return undefined
+    }
+    throw e
   }
-  return blockNumber
 }
