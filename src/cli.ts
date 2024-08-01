@@ -42,6 +42,7 @@ import {
     .option('address', {
       type: 'string',
       describe: 'The contract address to filter on',
+      demandOption: true,
       alias: 'a',
     })
     .option('rpc-url', {

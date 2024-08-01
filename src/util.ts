@@ -1,17 +1,28 @@
 import { AbstractProvider, ethers } from 'ethers'
+import { ethers as ethersv5 } from 'ethers-v5'
 
 /**
  * Makes specified fields of a type required
  */
 export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>
 
-/**
- * Restricts the Filter type to have fromBlock and toBlock as numbers
- */
-export type StrictFilter = Omit<ethers.Filter, 'fromBlock' | 'toBlock'> & {
+export type EventFilter = {
+  address: string
+  topics: (string | string[] | null)[]
+}
+export type Filter = EventFilter & {
+  fromBlock: ethers.BlockTag | undefined
+  toBlock: ethers.BlockTag | undefined
+}
+export type StrictFilter = EventFilter & {
   fromBlock: number
   toBlock: number
 }
+
+/**
+ * Unify ethers v5 and v6 log types
+ */
+export type EthersLog = ethers.LogParams & ethersv5.providers.Log
 
 /**
  * Represents a range of blocks
@@ -21,25 +32,68 @@ export type BlockRange = {
   toBlock: number
 }
 
-/**
- * Converts a block tag to a block number
- * @param provider - The Ethereum provider
- * @param tag - The block tag (number or string)
- * @returns The block number
- * @throws Error if the block is invalid
- */
-export async function tagToNumber(
-  provider: AbstractProvider,
-  tag: ethers.BlockTag
-) {
-  if (typeof tag === 'number') {
-    return tag
+export type EthersProvider = ethersv5.providers.Provider | AbstractProvider
+
+export class WrappedProvider {
+  constructor(public readonly provider: EthersProvider) {}
+
+  async getBlockNumberFromTag(tag: ethers.BlockTag): Promise<number> {
+    if (typeof tag === 'number') {
+      return tag
+    }
+    if (typeof tag === 'bigint') {
+      return parseInt(tag.toString())
+    }
+    const y = (await this.provider.getBlock(tag))?.number
+    if (y === undefined) {
+      throw new Error('Invalid block')
+    }
+    return y
   }
-  const y = (await provider.getBlock(tag))?.number
-  if (y === undefined) {
-    throw new Error('Invalid block')
+
+  async getFinalizedBlockNumber(): Promise<number | undefined> {
+    try {
+      const blockNumber = await this.getBlockNumberFromTag('finalized')
+      return blockNumber
+    } catch (e: any) {
+      const code: number = e.error?.code || 0
+      if (32000 <= -code && -code < 33000) {
+        return undefined
+      }
+      throw e
+    }
   }
-  return y
+
+  async getChainId(): Promise<number> {
+    const chainId = (await this.provider.getNetwork()).chainId
+    return parseInt(chainId.toString())
+  }
+
+  async getLogs(filter: StrictFilter): Promise<EthersLog[]> {
+    const result = await this.provider.getLogs(filter)
+
+    return result.map(log => {
+      const index = 'logIndex' in log ? log.logIndex : log.index
+
+      return {
+        ...log,
+        index,
+        logIndex: index,
+        topics: [...log.topics],
+      }
+    })
+  }
+
+  isV5(): this is { provider: ethersv5.providers.Provider } {
+    if ('sendTransaction' in this.provider) {
+      return true
+    }
+    return false
+  }
+
+  isV6(): this is { provider: AbstractProvider } {
+    return '_getFilter' in this.provider
+  }
 }
 
 /**
@@ -110,23 +164,4 @@ export function mergeRanges(ranges: BlockRange[]): BlockRange[] {
   mergedRanges.push(currentRange)
 
   return mergedRanges
-}
-
-/**
- * Gets the number of the latest finalized block
- * @param provider - The Ethereum provider
- * @returns The number of the latest finalized block
- * @throws Error if unable to get the finalized block number
- */
-export async function getFinalizedBlockNumber(provider: AbstractProvider) {
-  try {
-    const blockNumber = (await provider.getBlock('finalized'))?.number
-    return blockNumber
-  } catch (e: any) {
-    const code: number = e.error?.code || 0
-    if (32000 <= -code && -code < 33000) {
-      return undefined
-    }
-    throw e
-  }
 }

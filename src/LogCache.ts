@@ -1,12 +1,15 @@
-import { AbstractProvider, Filter, ethers } from 'ethers'
+import { ethers } from 'ethers'
 import Database from 'better-sqlite3'
 import {
   BlockRange,
   StrictFilter,
-  getFinalizedBlockNumber,
+  Filter,
   mergeRanges,
   subtractRanges,
-  tagToNumber,
+  EthersProvider,
+  EventFilter,
+  WrappedProvider,
+  EthersLog,
 } from './util'
 
 // Define internal DB type for log entries
@@ -25,8 +28,8 @@ type LogEntry = {
  * @param thisBatchTo - Ending block number of the current batch
  */
 export type FetchLogsBatchCallback = (
-  allLogs: ethers.Log[],
-  thisBatchLogs: ethers.Log[],
+  allLogs: EthersLog[],
+  thisBatchLogs: EthersLog[],
   thisBatchFrom: number,
   thisBatchTo: number
 ) => Promise<void> | void
@@ -43,8 +46,8 @@ export type FetchLogsBatchCallback = (
  * @param blocksToScan - Total number of blocks to scan
  */
 export type FetchLogsToCacheBatchCallback = (
-  logs: ethers.Log[],
-  thisBatchLogs: ethers.Log[],
+  logs: EthersLog[],
+  thisBatchLogs: EthersLog[],
   thisBatchFrom: number,
   thisBatchTo: number,
   ranges: BlockRange[],
@@ -96,7 +99,7 @@ export class LogCache {
    * @param logs - Array of logs to insert
    * @param filterId - Unique identifier for the filter
    */
-  private _insertLogs(logs: ethers.Log[], filterId: string): void {
+  private _insertLogs(logs: EthersLog[], filterId: string): void {
     const insertLog = this.db.prepare(
       'INSERT OR IGNORE INTO logs (filterId, blockNumber, logIndex, data) VALUES (?, ?, ?, ?)'
     )
@@ -200,7 +203,7 @@ export class LogCache {
    * @param batchCallback - Optional callback function for each batch
    */
   private async _fetchRangeToCache(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     strictFilter: StrictFilter,
     pageSize: number,
     batchCallback?: FetchLogsBatchCallback
@@ -230,16 +233,18 @@ export class LogCache {
    * @param batchCallback - Optional callback function for each batch
    */
   async fetchLogsToCache(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     filter: Filter,
     pageSize: number,
     batchCallback?: FetchLogsToCacheBatchCallback
   ): Promise<void> {
+    const wProvider = new WrappedProvider(provider)
+
     if (pageSize < 1) {
       throw new Error(`Invalid page size ${pageSize}`)
     }
 
-    const lastFinalizedBlock = await getFinalizedBlockNumber(provider)
+    const lastFinalizedBlock = await wProvider.getFinalizedBlockNumber()
 
     if (!lastFinalizedBlock) {
       throw new Error('Could not get finalized block')
@@ -298,12 +303,12 @@ export class LogCache {
    * Reads logs from cache for the given filter
    * @param provider - Ethereum provider
    * @param filter - Filter object - fromBlock and toBlock default to 'earliest' and 'latest'
-   * @returns Array of ethers.Log objects
+   * @returns Array of EthersLog objects
    */
   async readLogsFromCache(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     filter: Filter
-  ): Promise<ethers.Log[]> {
+  ): Promise<EthersLog[]> {
     // Set blocks to 'earliest' and 'latest' if not provided
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
     const filterId = await LogCache.getFilterId(provider, filter)
@@ -312,7 +317,7 @@ export class LogCache {
       strictFilter.fromBlock,
       strictFilter.toBlock
     )
-    return rows.map(row => new ethers.Log(JSON.parse(row.data), provider))
+    return rows.map(row => JSON.parse(row.data))
   }
 
   /**
@@ -322,22 +327,24 @@ export class LogCache {
    * @param pageSize - Number of blocks to fetch in each batch
    * @param finalizedLogsCallback - Optional callback for finalized logs
    * @param unfinalizedLogsCallback - Optional callback for unfinalized logs
-   * @returns Array of ethers.Log objects
+   * @returns Array of EthersLog objects
    */
   async getLogs(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     filter: Filter,
     pageSize: number,
     finalizedLogsCallback?: FetchLogsToCacheBatchCallback,
     unfinalizedLogsCallback?: FetchLogsBatchCallback
-  ): Promise<ethers.Log[]> {
+  ): Promise<EthersLog[]> {
+    const wProvider = new WrappedProvider(provider)
+
     // Get the number of the last finalized block
-    const lastFinalizedBlock = (await getFinalizedBlockNumber(provider)) || -1
+    const lastFinalizedBlock = (await wProvider.getFinalizedBlockNumber()) || -1
 
     // Set blocks to 'earliest' and 'latest' if not provided
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
 
-    const logs: ethers.Log[] = []
+    const logs: EthersLog[] = []
 
     // Fetch and cache logs for finalized blocks if some blocks in range are finalized
     if (strictFilter.fromBlock <= lastFinalizedBlock) {
@@ -383,14 +390,16 @@ export class LogCache {
    * @param filter - Filter object - fromBlock and toBlock default to 'earliest' and 'latest'
    * @param pageSize - Number of blocks to fetch in each batch
    * @param batchCallback - Optional callback function for each batch
-   * @returns Array of ethers.Log objects
+   * @returns Array of EthersLog objects
    */
   static async fetchLogs(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     filter: Filter,
     pageSize: number,
     batchCallback?: FetchLogsBatchCallback
-  ): Promise<ethers.Log[]> {
+  ): Promise<EthersLog[]> {
+    const wProvider = new WrappedProvider(provider)
+
     // Validate page size
     if (pageSize < 1) {
       throw new Error('Invalid page size')
@@ -401,7 +410,7 @@ export class LogCache {
 
     let fromBlock = strictFilter.fromBlock
 
-    const logs: ethers.Log[] = []
+    const logs: EthersLog[] = []
     while (fromBlock <= strictFilter.toBlock) {
       // Calculate the end block for this batch
       const thisToBlock = Math.min(
@@ -410,7 +419,7 @@ export class LogCache {
       )
 
       // Fetch logs for the current batch
-      const thisBatchLogs = await provider.getLogs({
+      const thisBatchLogs = await wProvider.getLogs({
         ...filter,
         fromBlock,
         toBlock: thisToBlock,
@@ -436,13 +445,13 @@ export class LogCache {
    * @returns Unique filter ID as a string
    */
   static async getFilterId(
-    provider: AbstractProvider,
-    filter: Pick<Filter, 'address' | 'topics'>
+    provider: EthersProvider,
+    filter: EventFilter
   ): Promise<string> {
-    const _filter = await provider._getFilter(filter)
     const chainId = (await provider.getNetwork()).chainId
 
-    const str = `${chainId}:${_filter.address}:${JSON.stringify(_filter.topics)}`
+    const str =
+      `${chainId}:${filter.address}:${JSON.stringify(filter.topics)}`.toLowerCase()
 
     return ethers.id(str)
   }
@@ -455,16 +464,15 @@ export class LogCache {
    * @returns The strict filter object.
    */
   static async toStrictFilter(
-    provider: AbstractProvider,
+    provider: EthersProvider,
     filter: Filter,
     defaultToBlock: ethers.BlockTag = 'latest'
   ): Promise<StrictFilter> {
-    const fromBlock = await tagToNumber(
-      provider,
+    const wProvider = new WrappedProvider(provider)
+    const fromBlock = await wProvider.getBlockNumberFromTag(
       filter.fromBlock || 'earliest'
     )
-    const toBlock = await tagToNumber(
-      provider,
+    const toBlock = await wProvider.getBlockNumberFromTag(
       filter.toBlock || defaultToBlock
     )
 

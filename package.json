@@ -16,6 +16,7 @@
     "@types/node": "^20.14.2",
     "@types/better-sqlite3": "^7.6.10",
     "@types/yargs": "^17.0.32",
+    "ethers-v5": "npm:ethers@^5.7.2",
     "prettier": "^3.3.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
