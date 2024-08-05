@@ -4,10 +4,7 @@ import Database from 'better-sqlite3'
 import { ethers, isHexString } from 'ethers'
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
-import {
-  FetchLogsBatchCallback,
-  LogCache,
-} from '.'
+import { FetchLogsBatchCallback, LogCache } from '.'
 
 // Main async function
 ;(async () => {
@@ -52,13 +49,15 @@ import {
     })
     .option('min-split', {
       type: 'number',
-      describe: 'The minimum block range to split per eth_getLogs request. A range smaller than this will not be split',
+      describe:
+        'The minimum block range to split per eth_getLogs request. A range smaller than this will not be split',
       alias: 'p',
       default: 1000,
     })
     .option('split-ways', {
       type: 'number',
-      describe: 'The number of ways to split a block range per eth_getLogs request',
+      describe:
+        'The number of ways to split a block range per eth_getLogs request',
       alias: 'b',
       default: 2,
     })
@@ -148,9 +147,10 @@ import {
     ) => {
       if (!argv.showProgress) return
       if (err) {
-        console.log(`Failed to fetch ${thisBatchFrom} to ${thisBatchTo}\n${err}`)
-      }
-      else {
+        console.log(
+          `Failed to fetch ${thisBatchFrom} to ${thisBatchTo}\n${err}`
+        )
+      } else {
         console.log(`Fetched blocks ${thisBatchFrom} to ${thisBatchTo}`)
       }
     }

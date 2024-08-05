@@ -305,7 +305,7 @@ export class LogCache {
     filter: Filter,
     minPageSize: number = 1000,
     splitWays: number = 2,
-    batchCallback?: FetchLogsBatchCallback,
+    batchCallback?: FetchLogsBatchCallback
   ): Promise<EthersLog[]> {
     const wProvider = new WrappedProvider(provider)
 
@@ -383,7 +383,13 @@ export class LogCache {
     // Convert the filter to a strict filter
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
 
-    return this._fetchLogsBinary(wProvider, strictFilter, minPageSize, splitWays, batchCallback) // todo make these configurable
+    return this._fetchLogsBinary(
+      wProvider,
+      strictFilter,
+      minPageSize,
+      splitWays,
+      batchCallback
+    ) // todo make these configurable
   }
 
   private async _fetchLogsBinary(
@@ -398,11 +404,10 @@ export class LogCache {
       return await this.promisePool.push(async () => {
         let err: Error | undefined = undefined
         let logs: EthersLog[] = []
-        
+
         try {
           logs = await provider.getLogs(filter)
-        }
-        catch (e: any) {
+        } catch (e: any) {
           err = e
         }
 
@@ -419,8 +424,10 @@ export class LogCache {
         throw e
       }
       // split K ways
-      const promises: Promise<EthersLog[]>[] = [];
-      const childRangeSize = Math.floor((filter.toBlock - filter.fromBlock) / splitWays)
+      const promises: Promise<EthersLog[]>[] = []
+      const childRangeSize = Math.floor(
+        (filter.toBlock - filter.fromBlock) / splitWays
+      )
       let from = filter.fromBlock
       for (let i = 0; i < splitWays; i++) {
         let to = from + childRangeSize - 1
@@ -428,7 +435,15 @@ export class LogCache {
           to = filter.toBlock
         }
 
-        promises.push(this._fetchLogsBinary(provider, { ...filter, fromBlock: from, toBlock: to }, minPageSize, splitWays, batchCallback))
+        promises.push(
+          this._fetchLogsBinary(
+            provider,
+            { ...filter, fromBlock: from, toBlock: to },
+            minPageSize,
+            splitWays,
+            batchCallback
+          )
+        )
         from = to + 1
       }
 
