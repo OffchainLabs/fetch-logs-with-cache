@@ -1,6 +1,6 @@
 {
   "name": "fetch-logs-with-cache",
-  "version": "0.0.9",
+  "version": "0.0.11",
   "main": "dist/index.js",
   "license": "MIT",
   "scripts": {
