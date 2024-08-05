@@ -1,6 +1,5 @@
 export {
   LogCache,
-  FetchLogsToCacheBatchCallback,
   FetchLogsBatchCallback,
 } from './LogCache'
 
