@@ -50,11 +50,17 @@ import {
       alias: 'r',
       default: 'http://localhost:8545',
     })
-    .option('page-size', {
+    .option('min-split', {
       type: 'number',
-      describe: 'The block range per eth_getLogs request',
+      describe: 'The minimum block range to split per eth_getLogs request. A range smaller than this will not be split',
       alias: 'p',
       default: 1000,
+    })
+    .option('split-ways', {
+      type: 'number',
+      describe: 'The number of ways to split a block range per eth_getLogs request',
+      alias: 'b',
+      default: 2,
     })
     .option('db-path', {
       type: 'string',
@@ -153,7 +159,8 @@ import {
     const logs = await logCache.getLogs(
       provider,
       filter,
-      argv.pageSize,
+      argv.minSplit,
+      argv.splitWays,
       batchCallback
     )
 

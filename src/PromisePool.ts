@@ -8,9 +8,6 @@ export class PromisePool<T> {
   }
 
   async push(fn: () => Promise<T>): Promise<T> {
-    console.log('pushing task')
-    console.log('running:', this.running.size)
-    console.log('backlog:', this.backlog.length)
     if (this.running.size < this.maxConcurrent) {
       return this.runTask(fn)
     } else {
@@ -33,17 +30,14 @@ export class PromisePool<T> {
   private async runTask(fn: () => Promise<T>): Promise<T> {
     const promise = fn()
     this.running.add(promise)
-    console.log('added promise to running')
 
     try {
       const result = await promise
       this.running.delete(promise)
-      console.log('removed promise from running')
       this.runNextTask()
       return result
     } catch (error) {
       this.running.delete(promise)
-      console.log('removed FAILED promise from running')
       this.runNextTask()
       throw error
     }
