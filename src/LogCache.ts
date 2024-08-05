@@ -41,14 +41,15 @@ export type FetchLogsBatchCallback = (
 export class LogCache {
   private db: Database.Database
 
-  private readonly promisePool: PromisePool<EthersLog[]> = new PromisePool(20) // todo make this configurable
+  private readonly promisePool: PromisePool<EthersLog[]>
 
   /**
    * Creates a new LogCache instance
    * @param db - Better-sqlite3 Database instance
    */
-  constructor(dbPath: string, ) {
+  constructor(dbPath: string, promisePoolSize: number = 20) {
     this.db = new Database(dbPath)
+    this.promisePool = new PromisePool(promisePoolSize)
     this._setUpDb()
   }
 
