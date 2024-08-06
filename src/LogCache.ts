@@ -11,6 +11,7 @@ import {
   WrappedProvider,
   EthersLog,
 } from './util'
+import { PromisePool } from './PromisePool'
 
 // Define internal DB type for log entries
 type LogEntry = {
@@ -22,38 +23,16 @@ type LogEntry = {
 
 /**
  * Callback function type for processing batches of logs
- * @param allLogs - All logs fetched so far
  * @param thisBatchLogs - Logs fetched in the current batch
  * @param thisBatchFrom - Starting block number of the current batch
  * @param thisBatchTo - Ending block number of the current batch
+ * @param err - Error object if an error occurred
  */
 export type FetchLogsBatchCallback = (
-  allLogs: EthersLog[],
-  thisBatchLogs: EthersLog[],
-  thisBatchFrom: number,
-  thisBatchTo: number
-) => Promise<void> | void
-
-/**
- * Callback function type for processing batches of logs during cache fetching
- * @param logs - All logs fetched so far
- * @param thisBatchLogs - Logs fetched in the current batch
- * @param thisBatchFrom - Starting block number of the current batch
- * @param thisBatchTo - Ending block number of the current batch
- * @param ranges - All block ranges to be fetched
- * @param thisRangeIndex - Index of the current range being fetched
- * @param totalScannedBlocks - Total number of blocks scanned so far
- * @param blocksToScan - Total number of blocks to scan
- */
-export type FetchLogsToCacheBatchCallback = (
-  logs: EthersLog[],
   thisBatchLogs: EthersLog[],
   thisBatchFrom: number,
   thisBatchTo: number,
-  ranges: BlockRange[],
-  thisRangeIndex: number,
-  totalScannedBlocks: number,
-  blocksToScan: number
+  err: Error | undefined
 ) => Promise<void> | void
 
 /**
@@ -62,12 +41,15 @@ export type FetchLogsToCacheBatchCallback = (
 export class LogCache {
   private db: Database.Database
 
+  private readonly promisePool: PromisePool<EthersLog[]>
+
   /**
    * Creates a new LogCache instance
    * @param db - Better-sqlite3 Database instance
    */
-  constructor(dbPath: string) {
+  constructor(dbPath: string, promisePoolSize: number = 20) {
     this.db = new Database(dbPath)
+    this.promisePool = new PromisePool(promisePoolSize)
     this._setUpDb()
   }
 
@@ -199,28 +181,33 @@ export class LogCache {
    * Fetches logs for a specific range and caches them
    * @param provider - Ethereum provider
    * @param strictFilter - StrictFilter object
-   * @param pageSize - Number of blocks to fetch in each batch
+   * @param minPageSize - Number of blocks to fetch in each batch. Will not split further below this value.
+   * @param splitWays - Number of ways to split the range if an error occurs
    * @param batchCallback - Optional callback function for each batch
    */
   private async _fetchRangeToCache(
     provider: EthersProvider,
     strictFilter: StrictFilter,
-    pageSize: number,
+    minPageSize: number,
+    splitWays: number,
     batchCallback?: FetchLogsBatchCallback
   ): Promise<void> {
     const filterId = await LogCache.getFilterId(provider, strictFilter)
 
-    await LogCache.fetchLogs(
+    await this.fetchLogs(
       provider,
       strictFilter,
-      pageSize,
-      async (logs, thisBatchLogs, thisBatchFrom, thisBatchTo) => {
-        this.db.transaction(() => {
-          this._insertLogs(thisBatchLogs, filterId)
-          this._insertRange(filterId, thisBatchFrom, thisBatchTo)
-        })()
+      minPageSize,
+      splitWays,
+      async (thisBatchLogs, thisBatchFrom, thisBatchTo, err) => {
+        if (!err) {
+          this.db.transaction(() => {
+            this._insertLogs(thisBatchLogs, filterId)
+            this._insertRange(filterId, thisBatchFrom, thisBatchTo)
+          })()
+        }
 
-        await batchCallback?.(logs, thisBatchLogs, thisBatchFrom, thisBatchTo)
+        await batchCallback?.(thisBatchLogs, thisBatchFrom, thisBatchTo, err)
       }
     )
   }
@@ -229,19 +216,21 @@ export class LogCache {
    * Fetches logs to cache for the given filter
    * @param provider - Ethereum provider
    * @param filter - Filter object - fromBlock and toBlock default to 'earliest' and 'finalized'
-   * @param pageSize - Number of blocks to fetch in each batch
+   * @param minPageSize - Number of blocks to fetch in each batch. Will not split further below this value.
+   * @param splitWays - Number of ways to split the range if an error occurs
    * @param batchCallback - Optional callback function for each batch
    */
   async fetchLogsToCache(
     provider: EthersProvider,
     filter: Filter,
-    pageSize: number,
-    batchCallback?: FetchLogsToCacheBatchCallback
+    minPageSize: number = 1000,
+    splitWays: number = 2,
+    batchCallback?: FetchLogsBatchCallback
   ): Promise<void> {
     const wProvider = new WrappedProvider(provider)
 
-    if (pageSize < 1) {
-      throw new Error(`Invalid page size ${pageSize}`)
+    if (minPageSize < 1) {
+      throw new Error(`Invalid page size ${minPageSize}`)
     }
 
     const lastFinalizedBlock = await wProvider.getFinalizedBlockNumber()
@@ -267,32 +256,14 @@ export class LogCache {
 
     const missingRanges = this._getMissingRanges(filterId, strictFilter)
 
-    let totalScannedBlocks = 0
-    const blocksToScan = missingRanges.reduce(
-      (acc, range) => acc + range.toBlock - range.fromBlock + 1,
-      0
-    )
-
     for (let i = 0; i < missingRanges.length; i++) {
       const range = missingRanges[i]
       await this._fetchRangeToCache(
         provider,
         { ...filter, ...range },
-        pageSize,
-        (logs, thisBatchLogs, thisBatchFrom, thisBatchTo) => {
-          totalScannedBlocks += thisBatchTo - thisBatchFrom + 1
-
-          return batchCallback?.(
-            logs,
-            thisBatchLogs,
-            thisBatchFrom,
-            thisBatchTo,
-            missingRanges,
-            i,
-            totalScannedBlocks,
-            blocksToScan
-          )
-        }
+        minPageSize,
+        splitWays,
+        batchCallback
       )
     }
 
@@ -324,17 +295,17 @@ export class LogCache {
    * Gets logs for the given filter, using the cache for finalized blocks but not unfinalized blocks
    * @param provider - Ethereum provider
    * @param filter - Filter object - fromBlock and toBlock default to 'earliest' and 'latest'
-   * @param pageSize - Number of blocks to fetch in each batch
-   * @param finalizedLogsCallback - Optional callback for finalized logs
-   * @param unfinalizedLogsCallback - Optional callback for unfinalized logs
+   * @param minPageSize - Number of blocks to fetch in each batch. Will not split further below this value.
+   * @param splitWays - Number of ways to split the range if an error occurs
+   * @param batchCallback - Optional callback for each batch of logs
    * @returns Array of EthersLog objects
    */
   async getLogs(
     provider: EthersProvider,
     filter: Filter,
-    pageSize: number,
-    finalizedLogsCallback?: FetchLogsToCacheBatchCallback,
-    unfinalizedLogsCallback?: FetchLogsBatchCallback
+    minPageSize: number = 1000,
+    splitWays: number = 2,
+    batchCallback?: FetchLogsBatchCallback
   ): Promise<EthersLog[]> {
     const wProvider = new WrappedProvider(provider)
 
@@ -356,8 +327,9 @@ export class LogCache {
       await this.fetchLogsToCache(
         provider,
         finalizedFilter,
-        pageSize,
-        finalizedLogsCallback
+        minPageSize,
+        splitWays,
+        batchCallback
       )
 
       // Read cached logs for finalized blocks
@@ -367,14 +339,15 @@ export class LogCache {
     // If the requested toBlock is beyond the last finalized block,
     // fetch logs for unfinalized blocks directly (without caching)
     if (strictFilter.toBlock > lastFinalizedBlock) {
-      const unfinalizedLogs = await LogCache.fetchLogs(
+      const unfinalizedLogs = await this.fetchLogs(
         provider,
         {
           ...strictFilter,
           fromBlock: Math.max(lastFinalizedBlock + 1, strictFilter.fromBlock),
         },
-        pageSize,
-        unfinalizedLogsCallback
+        minPageSize,
+        splitWays,
+        batchCallback
       )
 
       // Combine finalized (cached) logs with unfinalized logs
@@ -388,54 +361,94 @@ export class LogCache {
    * Fetches logs for the given filter
    * @param provider - Ethereum provider
    * @param filter - Filter object - fromBlock and toBlock default to 'earliest' and 'latest'
-   * @param pageSize - Number of blocks to fetch in each batch
+   * @param minPageSize - Number of blocks to fetch in each batch. Will not split further below this value.
+   * @param splitWays - Number of ways to split the range if an error occurs
    * @param batchCallback - Optional callback function for each batch
    * @returns Array of EthersLog objects
    */
-  static async fetchLogs(
+  async fetchLogs(
     provider: EthersProvider,
     filter: Filter,
-    pageSize: number,
+    minPageSize: number = 1000,
+    splitWays: number = 2,
     batchCallback?: FetchLogsBatchCallback
   ): Promise<EthersLog[]> {
     const wProvider = new WrappedProvider(provider)
 
     // Validate page size
-    if (pageSize < 1) {
+    if (minPageSize < 1) {
       throw new Error('Invalid page size')
     }
 
     // Convert the filter to a strict filter
     const strictFilter = await LogCache.toStrictFilter(provider, filter)
 
-    let fromBlock = strictFilter.fromBlock
+    return this._fetchLogsBinary(
+      wProvider,
+      strictFilter,
+      minPageSize,
+      splitWays,
+      batchCallback
+    ) // todo make these configurable
+  }
 
-    const logs: EthersLog[] = []
-    while (fromBlock <= strictFilter.toBlock) {
-      // Calculate the end block for this batch
-      const thisToBlock = Math.min(
-        fromBlock + pageSize - 1,
-        strictFilter.toBlock
-      )
+  private async _fetchLogsBinary(
+    provider: WrappedProvider,
+    filter: StrictFilter,
+    minPageSize: number,
+    splitWays: number,
+    batchCallback?: FetchLogsBatchCallback
+  ): Promise<EthersLog[]> {
+    // try full range, if throw, split
+    try {
+      return await this.promisePool.push(async () => {
+        let err: Error | undefined = undefined
+        let logs: EthersLog[] = []
 
-      // Fetch logs for the current batch
-      const thisBatchLogs = await wProvider.getLogs({
-        ...filter,
-        fromBlock,
-        toBlock: thisToBlock,
+        try {
+          logs = await provider.getLogs(filter)
+        } catch (e: any) {
+          err = e
+        }
+
+        batchCallback?.(logs, filter.fromBlock, filter.toBlock, err)
+
+        if (err) {
+          throw err
+        }
+
+        return logs
       })
+    } catch (e) {
+      if (filter.toBlock - filter.fromBlock < minPageSize) {
+        throw e
+      }
+      // split K ways
+      const promises: Promise<EthersLog[]>[] = []
+      const childRangeSize = Math.floor(
+        (filter.toBlock - filter.fromBlock) / splitWays
+      )
+      let from = filter.fromBlock
+      for (let i = 0; i < splitWays; i++) {
+        let to = from + childRangeSize - 1
+        if (i === splitWays - 1) {
+          to = filter.toBlock
+        }
 
-      // Add the fetched logs to the overall logs array
-      logs.push(...thisBatchLogs)
+        promises.push(
+          this._fetchLogsBinary(
+            provider,
+            { ...filter, fromBlock: from, toBlock: to },
+            minPageSize,
+            splitWays,
+            batchCallback
+          )
+        )
+        from = to + 1
+      }
 
-      // Call the batch callback if provided
-      await batchCallback?.(logs, thisBatchLogs, fromBlock, thisToBlock)
-
-      // Move to the next batch
-      fromBlock = thisToBlock + 1
+      return (await Promise.all(promises)).flat()
     }
-
-    return logs
   }
 
   /**
