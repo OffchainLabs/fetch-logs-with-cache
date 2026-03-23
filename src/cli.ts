@@ -4,11 +4,7 @@ import Database from 'better-sqlite3'
 import { ethers, isHexString } from 'ethers'
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
-import {
-  FetchLogsToCacheBatchCallback,
-  FetchLogsBatchCallback,
-  LogCache,
-} from '.'
+import { FetchLogsBatchCallback, LogCache } from '.'
 
 // Main async function
 ;(async () => {
@@ -51,11 +47,19 @@ import {
       alias: 'r',
       default: 'http://localhost:8545',
     })
-    .option('page-size', {
+    .option('min-split', {
       type: 'number',
-      describe: 'The block range per eth_getLogs request',
+      describe:
+        'The minimum block range to split per eth_getLogs request. A range smaller than this will not be split',
       alias: 'p',
       default: 1000,
+    })
+    .option('split-ways', {
+      type: 'number',
+      describe:
+        'The number of ways to split a block range per eth_getLogs request',
+      alias: 'b',
+      default: 2,
     })
     .option('db-path', {
       type: 'string',
@@ -101,7 +105,7 @@ import {
   if (argv.sigOrTopic !== undefined) {
     const topic0 = isHexString(argv.sigOrTopic)
       ? argv.sigOrTopic
-      : new ethers.Interface([argv.sigOrTopic]).getEvent(argv.sigOrTopic)!
+      : new ethers.Interface([argv.sigOrTopic]).getEvent(argv.sigOrTopic)! // todo: prepend with 'event' if not there
           .topicHash
     topics.push(topic0)
   }
@@ -135,44 +139,29 @@ import {
       toBlock,
     }
 
-    // Define callbacks for progress reporting
-    const finalizedCallback: FetchLogsToCacheBatchCallback = async (
-      _logs,
+    const batchCallback: FetchLogsBatchCallback = async (
       _thisBatchLogs,
       thisBatchFrom,
       thisBatchTo,
-      _missingRanges,
-      _rangeI,
-      totalScannedBlocks,
-      blocksToScan
+      err
     ) => {
       if (!argv.showProgress) return
-
-      const progress = ((totalScannedBlocks / blocksToScan) * 100).toFixed(2)
-
-      console.log(
-        `Finalized blocks ${thisBatchFrom} to ${thisBatchTo} (${progress}%)`
-      )
-    }
-
-    const unfinalizedCallback: FetchLogsBatchCallback = async (
-      _logs,
-      _thisBatchLogs,
-      thisBatchFrom,
-      thisBatchTo
-    ) => {
-      if (!argv.showProgress) return
-
-      console.log(`Unfinalized blocks ${thisBatchFrom} to ${thisBatchTo}`)
+      if (err) {
+        console.log(
+          `Failed to fetch ${thisBatchFrom} to ${thisBatchTo}\n${err}`
+        )
+      } else {
+        console.log(`Fetched blocks ${thisBatchFrom} to ${thisBatchTo}`)
+      }
     }
 
     // Fetch logs
     const logs = await logCache.getLogs(
       provider,
       filter,
-      argv.pageSize,
-      finalizedCallback,
-      unfinalizedCallback
+      argv.minSplit,
+      argv.splitWays,
+      batchCallback
     )
 
     // Output results

@@ -11,8 +11,8 @@ export type EventFilter = {
   topics: (string | string[] | null)[]
 }
 export type Filter = EventFilter & {
-  fromBlock: ethers.BlockTag | undefined
-  toBlock: ethers.BlockTag | undefined
+  fromBlock?: ethers.BlockTag
+  toBlock?: ethers.BlockTag
 }
 export type StrictFilter = EventFilter & {
   fromBlock: number
